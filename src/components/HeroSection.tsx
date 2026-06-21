@@ -125,15 +125,17 @@ export const HeroSection: FC = () => {
   }, []);
 
   return (
-    <section className="relative w-full overflow-hidden h-screen bg-black" style={{ height: '100dvh' }}>
+    <section className="relative w-full overflow-hidden h-screen bg-black" style={{ height: '100dvh' }} aria-label="GreenLens Hero Section">
       {/* Layer 1: Base Image */}
       <div
         className="absolute inset-0 bg-center bg-cover bg-no-repeat grayscale-[30%] opacity-80 hero-zoom z-10"
         style={{ backgroundImage: "url('/supermarket_base.png')" }}
+        role="img"
+        aria-label="Bustling supermarket aisle representing modern consumption habits"
       />
 
       {/* Layer 1.5: Heavy Dark Overlay for Contrast (Legibility Fix) */}
-      <div className="absolute inset-0 bg-black/60 z-20 pointer-events-none" />
+      <div className="absolute inset-0 bg-black/60 z-20 pointer-events-none" aria-hidden="true" />
 
       {/* Layer 2: Reveal layer */}
       <RevealLayer
@@ -180,6 +182,7 @@ export const HeroSection: FC = () => {
         </p>
         <button
           onClick={() => navigate('/scanner')}
+          aria-label="Launch Carbon Scanner Page"
           className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold px-8 py-3.5 rounded-full transition-all hover:scale-[1.03] active:scale-95 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
         >
           Launch Scanner

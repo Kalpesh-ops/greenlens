@@ -24,6 +24,11 @@ const cleanJsonText = (rawText: string): string => {
   return cleaned;
 };
 
+const sanitizeString = (str: string): string => {
+  // Strip any HTML tags to prevent DOM injection / XSS
+  return str.replace(/<[^>]*>/g, '');
+};
+
 const auditCarbonFootprint = async (dataUrl: string): Promise<GeminiResponse> => {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
@@ -82,8 +87,32 @@ const auditCarbonFootprint = async (dataUrl: string): Promise<GeminiResponse> =>
         throw new Error("No response text found in candidate content parts.");
       }
 
-      const parsed: GeminiResponse = JSON.parse(cleanJsonText(textResponse));
-      return parsed;
+      const parsed = JSON.parse(cleanJsonText(textResponse));
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error("Invalid audit payload: Response is not a valid JSON object.");
+      }
+
+      const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+      const validatedItems = rawItems.map((item: any) => {
+        const rawName = typeof item.name === 'string' ? item.name : 'Audited Item';
+        const rawAlternative = typeof item.alternative === 'string' ? item.alternative : 'Choose local seasonal options';
+        return {
+          name: sanitizeString(rawName),
+          co2e: typeof item.co2e === 'number' && isFinite(item.co2e) && item.co2e >= 0 ? item.co2e : 0,
+          alternative: sanitizeString(rawAlternative)
+        };
+      });
+
+      const total_co2e = typeof parsed.total_co2e === 'number' && isFinite(parsed.total_co2e) && parsed.total_co2e >= 0
+        ? parsed.total_co2e
+        : validatedItems.reduce((acc: number, curr: GeminiItem) => acc + curr.co2e, 0);
+
+      const validatedResponse: GeminiResponse = {
+        items: validatedItems,
+        total_co2e: total_co2e
+      };
+
+      return validatedResponse;
     } catch (err) {
       console.warn(`Model ${model} failed:`, err);
       lastError = err;
@@ -249,6 +278,8 @@ export const Scanner: FC = () => {
                   autoPlay
                   playsInline
                   muted
+                  title="Active Camera Streaming Feed"
+                  aria-label="Live camera view for scanning receipts or items"
                   className="absolute inset-0 w-full h-full object-cover"
                 />
               )}
@@ -256,14 +287,14 @@ export const Scanner: FC = () => {
               {capturedImage && !isCameraActive && (
                 <img
                   src={capturedImage}
-                  alt="Captured Preview"
+                  alt="Captured receipt or product scan preview"
                   className="absolute inset-0 w-full h-full object-cover"
                 />
               )}
 
               {!isCameraActive && !capturedImage && (
                 <div className="text-gray-500 text-sm text-center p-4">
-                  <svg className="mx-auto h-12 w-12 text-gray-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="mx-auto h-12 w-12 text-gray-600 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 0 1 2-2h.93a2 2 0 0 0 1.664-.89l.812-1.22A2 2 0 0 1 10.07 4h3.86a2 2 0 0 1 1.664.89l.812 1.22A2 2 0 0 0 18.07 7H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
                   </svg>
@@ -273,13 +304,14 @@ export const Scanner: FC = () => {
             </div>
 
             {/* Hidden Canvas */}
-            <canvas ref={canvasRef} style={{ display: 'none' }} />
+            <canvas ref={canvasRef} style={{ display: 'none' }} aria-hidden="true" />
 
             {/* Camera Actions */}
             <div className="flex gap-4">
               {!isCameraActive ? (
                 <button
                   onClick={startCamera}
+                  aria-label="Start local device camera for live receipt scanning"
                   className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm transition-all cursor-pointer"
                 >
                   Start Camera
@@ -288,12 +320,14 @@ export const Scanner: FC = () => {
                 <div className="flex-1 flex gap-2">
                   <button
                     onClick={capturePhoto}
+                    aria-label="Capture snapshot from the camera stream"
                     className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold rounded-xl text-sm transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer"
                   >
                     Capture Frame
                   </button>
                   <button
                     onClick={stopCamera}
+                    aria-label="Cancel and turn off camera stream"
                     className="py-3 px-5 bg-red-650 hover:bg-red-500 text-white font-semibold rounded-xl text-sm transition-all border border-red-500/20 cursor-pointer"
                   >
                     Cancel
@@ -303,7 +337,7 @@ export const Scanner: FC = () => {
             </div>
 
             {/* Divider */}
-            <div className="relative flex py-2 items-center">
+            <div className="relative flex py-2 items-center" aria-hidden="true">
               <div className="flex-grow border-t border-white/10"></div>
               <span className="flex-shrink mx-4 text-gray-500 text-xs uppercase tracking-widest font-semibold">Or</span>
               <div className="flex-grow border-t border-white/10"></div>
@@ -314,21 +348,31 @@ export const Scanner: FC = () => {
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
+              role="button"
+              tabIndex={0}
+              aria-label="Drag and drop your receipt or product image, or press Enter to browse files"
               className={`border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer ${
                 dragOver
                   ? 'border-emerald-400 bg-emerald-500/5'
                   : 'border-white/10 hover:border-white/20 bg-black/10'
               }`}
               onClick={() => document.getElementById('file-upload')?.click()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  document.getElementById('file-upload')?.click();
+                }
+              }}
             >
               <input
                 id="file-upload"
                 type="file"
                 accept="image/*"
                 className="hidden"
+                aria-label="Choose receipt or product image file to upload"
                 onChange={handleFileChange}
               />
-              <svg className="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
               </svg>
               <p className="text-sm font-semibold text-gray-300">Drag & drop your receipt or product image</p>

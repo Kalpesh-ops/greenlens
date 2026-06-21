@@ -1,45 +1,112 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-interface MockResponse {
-  item: string;
-  origin: string;
-  transit_distance_km: number;
-  co2e_footprint_kg: number;
-  equivalent_driving_miles: number;
-  carbon_rating: string;
-  sustainable_alternatives: {
-    name: string;
-    co2e_footprint_kg: number;
-    reduction_pct: number;
-  }[];
+interface GeminiItem {
+  name: string;
+  co2e: number;
+  alternative: string;
 }
 
-const mockAuditResponse: MockResponse = {
-  item: "Organic Avocado (Pack of 3)",
-  origin: "Michoacán, Mexico",
-  transit_distance_km: 3450,
-  co2e_footprint_kg: 0.85,
-  equivalent_driving_miles: 2.1,
-  carbon_rating: "B-",
-  sustainable_alternatives: [
-    {
-      name: "Local Seasonal Produce (Berries & Apples)",
-      co2e_footprint_kg: 0.22,
-      reduction_pct: 74.1
-    },
-    {
-      name: "Fair-trade Greenhouse Avocados (Regional)",
-      co2e_footprint_kg: 0.48,
-      reduction_pct: 43.5
+interface GeminiResponse {
+  items: GeminiItem[];
+  total_co2e: number;
+}
+
+const MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+
+const cleanJsonText = (rawText: string): string => {
+  let cleaned = rawText.trim();
+  if (cleaned.startsWith("```json")) {
+    cleaned = cleaned.replace(/^```json\s*/i, "").replace(/\s*```$/i, "");
+  } else if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```\s*/i, "").replace(/\s*```$/i, "");
+  }
+  return cleaned;
+};
+
+const auditCarbonFootprint = async (dataUrl: string): Promise<GeminiResponse> => {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Gemini API key is not configured. Please add VITE_GEMINI_API_KEY to your .env file.");
+  }
+
+  // Parse mime type and strip prefix for raw base64
+  const match = dataUrl.match(/^data:(image\/\w+);base64,/);
+  const mimeType = match ? match[1] : 'image/png';
+  const base64Clean = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+
+  const prompt = "Analyze this image. Identify the primary items or activities shown. Estimate their carbon footprint (CO2e in kg) and suggest a simple, greener alternative. Return ONLY a valid JSON object with the following structure: { 'items': [ { 'name': string, 'co2e': number, 'alternative': string } ], 'total_co2e': number }.";
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Clean
+            }
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseMimeType: "application/json"
     }
-  ]
+  };
+
+  let lastError: any = null;
+  for (const model of MODELS) {
+    try {
+      console.log(`Attempting Gemini API audit with model: ${model}`);
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        }
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP error ${response.status}: ${text}`);
+      }
+
+      const responseData = await response.json();
+      const textResponse = responseData.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!textResponse) {
+        throw new Error("No response text found in candidate content parts.");
+      }
+
+      const parsed: GeminiResponse = JSON.parse(cleanJsonText(textResponse));
+      return parsed;
+    } catch (err) {
+      console.warn(`Model ${model} failed:`, err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("All Gemini models failed to process the request.");
+};
+
+const getCarbonRating = (co2e: number) => {
+  if (co2e <= 0.2) return { grade: 'A+', color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' };
+  if (co2e <= 0.6) return { grade: 'A', color: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' };
+  if (co2e <= 1.5) return { grade: 'B', color: 'text-teal-400 border-teal-500/20 bg-teal-500/5' };
+  if (co2e <= 3.5) return { grade: 'C', color: 'text-yellow-400 border-yellow-500/20 bg-yellow-500/5' };
+  if (co2e <= 7.0) return { grade: 'D', color: 'text-orange-400 border-orange-500/20 bg-orange-500/5' };
+  return { grade: 'F', color: 'text-red-400 border-red-500/20 bg-red-500/5' };
 };
 
 export const Scanner: React.FC = () => {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<MockResponse | null>(null);
+  const [result, setResult] = useState<GeminiResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
 
@@ -59,6 +126,7 @@ export const Scanner: React.FC = () => {
       }
       setIsCameraActive(true);
       setResult(null);
+      setError(null);
       setCapturedImage(null);
     } catch (err) {
       console.error("Camera access failed:", err);
@@ -97,19 +165,25 @@ export const Scanner: React.FC = () => {
         const dataUrl = canvas.toDataURL('image/png');
         setCapturedImage(dataUrl);
         stopCamera();
-        triggerAudit();
+        triggerAudit(dataUrl);
       }
     }
   };
 
-  // Simulate AI Auditing
-  const triggerAudit = () => {
+  // Perform AI Auditing
+  const triggerAudit = async (imageSrc: string) => {
     setLoading(true);
+    setError(null);
     setResult(null);
-    setTimeout(() => {
+    try {
+      const auditResult = await auditCarbonFootprint(imageSrc);
+      setResult(auditResult);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to process image. Ensure VITE_GEMINI_API_KEY is configured in your .env file.");
+    } finally {
       setLoading(false);
-      setResult(mockAuditResponse);
-    }, 2500); // 2.5 seconds loading state
+    }
   };
 
   // File Upload Handlers
@@ -142,26 +216,27 @@ export const Scanner: React.FC = () => {
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
-        setCapturedImage(event.target.result as string);
+        const dataUrl = event.target.result as string;
+        setCapturedImage(dataUrl);
         stopCamera();
-        triggerAudit();
+        triggerAudit(dataUrl);
       }
     };
     reader.readAsDataURL(file);
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0f0d] pt-24 px-4 sm:px-6 lg:px-8 text-white flex flex-col items-center">
-      <div className="w-full max-w-3xl">
+    <div className="min-h-screen bg-[#0a0f0d] pt-24 pb-16 px-4 sm:px-6 lg:px-8 text-white flex flex-col items-center">
+      <div className="w-full max-w-4xl">
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-outfit font-bold text-emerald-400">GreenLens AI Scanner</h1>
           <p className="text-gray-400 mt-2">Scan receipts, barcodes, or food items to audit their carbon footprints instantly.</p>
         </div>
 
-        {/* Main Interface Grid */}
+        {/* Main Input Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-          {/* Inputs Section */}
+          {/* Column 1: Input controls */}
           <div className="space-y-6 bg-black/35 backdrop-blur-md p-6 rounded-2xl border border-white/10">
             <h2 className="text-xl font-outfit font-semibold mb-4 text-emerald-350">Capture or Upload</h2>
 
@@ -204,7 +279,7 @@ export const Scanner: React.FC = () => {
               {!isCameraActive ? (
                 <button
                   onClick={startCamera}
-                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm transition-all"
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm transition-all cursor-pointer"
                 >
                   Start Camera
                 </button>
@@ -212,13 +287,13 @@ export const Scanner: React.FC = () => {
                 <div className="flex-1 flex gap-2">
                   <button
                     onClick={capturePhoto}
-                    className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold rounded-xl text-sm transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+                    className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold rounded-xl text-sm transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer"
                   >
                     Capture Frame
                   </button>
                   <button
                     onClick={stopCamera}
-                    className="py-3 px-5 bg-red-650 hover:bg-red-500 text-white font-semibold rounded-xl text-sm transition-all border border-red-500/20"
+                    className="py-3 px-5 bg-red-650 hover:bg-red-500 text-white font-semibold rounded-xl text-sm transition-all border border-red-500/20 cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -260,8 +335,8 @@ export const Scanner: React.FC = () => {
             </div>
           </div>
 
-          {/* Output / Results Section */}
-          <div className="space-y-6 bg-black/35 backdrop-blur-md p-6 rounded-2xl border border-white/10 min-h-[350px] flex flex-col justify-center">
+          {/* Column 2: Status / Loading view */}
+          <div className="bg-black/35 backdrop-blur-md p-6 rounded-2xl border border-white/10 min-h-[345px] flex flex-col justify-center">
             {loading && (
               <div className="flex flex-col items-center justify-center py-12 space-y-4">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-emerald-400"></div>
@@ -269,68 +344,94 @@ export const Scanner: React.FC = () => {
               </div>
             )}
 
-            {!loading && !result && (
+            {error && (
+              <div className="text-center text-red-400 p-4 border border-red-500/20 bg-red-500/5 rounded-xl">
+                <svg className="mx-auto h-12 w-12 text-red-500 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <p className="text-sm font-semibold">{error}</p>
+              </div>
+            )}
+
+            {!loading && !result && !error && (
               <div className="text-center text-gray-500 py-12">
                 <svg className="mx-auto h-12 w-12 text-gray-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2z" />
                 </svg>
-                <p className="text-sm">Audit results will be rendered here after image input capture.</p>
+                <p className="text-sm">Audit results will display here after you snap a photo or upload an image.</p>
               </div>
             )}
 
             {!loading && result && (
-              <div className="space-y-6 animate-fade-in">
-                <div className="border-b border-white/10 pb-4">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-xs text-emerald-400 font-semibold tracking-wider uppercase">Audit Completed</span>
-                      <h3 className="text-2xl font-outfit font-bold mt-1 text-white">{result.item}</h3>
-                    </div>
-                    <span className="px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold rounded-lg text-lg">
-                      {result.carbon_rating}
-                    </span>
-                  </div>
+              <div className="text-center py-12 space-y-4">
+                <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/20 rounded-full flex items-center justify-center mx-auto">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
                 </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-                    <p className="text-xs text-gray-400 uppercase font-semibold">CO2e Emissions</p>
-                    <p className="text-xl font-bold mt-1 text-emerald-350">{result.co2e_footprint_kg} kg</p>
-                  </div>
-                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-                    <p className="text-xs text-gray-400 uppercase font-semibold">Equivalent Drive</p>
-                    <p className="text-xl font-bold mt-1 text-emerald-350">{result.equivalent_driving_miles} mi</p>
-                  </div>
-                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-                    <p className="text-xs text-gray-400 uppercase font-semibold">Origin Point</p>
-                    <p className="text-sm font-semibold mt-2 truncate text-white">{result.origin}</p>
-                  </div>
-                  <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-                    <p className="text-xs text-gray-400 uppercase font-semibold">Transit Distance</p>
-                    <p className="text-sm font-semibold mt-2 text-white">{result.transit_distance_km} km</p>
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="text-sm font-semibold text-emerald-400 mb-3 uppercase tracking-wider">Sustainable Alternatives</h4>
-                  <div className="space-y-3">
-                    {result.sustainable_alternatives.map((alt, idx) => (
-                      <div key={idx} className="flex justify-between items-center bg-emerald-500/5 hover:bg-emerald-500/10 border border-emerald-500/20 p-3.5 rounded-xl transition-all">
-                        <div>
-                          <p className="text-sm font-bold text-white">{alt.name}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">Footprint: {alt.co2e_footprint_kg} kg CO2e</p>
-                        </div>
-                        <span className="text-xs font-bold bg-emerald-500 text-white px-2.5 py-1.5 rounded-lg shadow-sm">
-                          -{alt.reduction_pct}%
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <h3 className="text-xl font-outfit font-bold">Analysis Complete</h3>
+                <p className="text-gray-400 text-sm">Detailed audit parameters are loaded below.</p>
               </div>
             )}
           </div>
         </div>
+
+        {/* Sleek full-width Results Card below input grid */}
+        {!loading && result && (
+          <div className="mt-8 bg-black/45 backdrop-blur-md p-6 sm:p-8 rounded-2xl border border-white/10 w-full animate-fade-in">
+            {/* Header info */}
+            <div className="border-b border-white/10 pb-6 mb-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <span className="text-xs text-emerald-400 font-bold tracking-wider uppercase">Active Carbon Audit Report</span>
+                  <h3 className="text-3xl font-outfit font-bold text-white mt-1">Footprint Breakdown</h3>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <p className="text-xs text-gray-400 uppercase font-semibold">Aggregate Footprint</p>
+                    <p className="text-2xl font-bold text-white mt-0.5">{result.total_co2e.toFixed(2)} kg CO2e</p>
+                  </div>
+                  <div className={`px-4 py-2 border rounded-xl font-outfit font-bold text-2xl ${getCarbonRating(result.total_co2e).color}`}>
+                    {getCarbonRating(result.total_co2e).grade}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* List of items */}
+            <div className="space-y-6">
+              <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-widest">Audited Items & Suggestions</h4>
+              <div className="grid grid-cols-1 gap-6">
+                {result.items.map((item, idx) => (
+                  <div key={idx} className="bg-white/5 p-5 rounded-xl border border-white/5 space-y-4">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h5 className="text-lg font-outfit font-bold text-white">{item.name}</h5>
+                        <p className="text-xs text-gray-400 mt-0.5">Detected via Vision OCR</p>
+                      </div>
+                      <span className="text-sm font-bold bg-white/10 border border-white/10 px-3 py-1 rounded-lg">
+                        {item.co2e.toFixed(2)} kg CO2e
+                      </span>
+                    </div>
+
+                    <div className="bg-emerald-500/5 hover:bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between transition-all">
+                      <div>
+                        <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider block mb-1">Sustainable Choice</span>
+                        <p className="text-sm font-semibold text-white">{item.alternative}</p>
+                      </div>
+                      <span className="text-xs font-bold bg-emerald-500 text-white px-2.5 py-1.5 rounded-lg flex items-center gap-1">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <polyline points="18 15 12 9 6 15"></polyline>
+                        </svg>
+                        Reduce
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

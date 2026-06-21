@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import type { FC } from 'react';
 
 interface GeminiItem {
   name: string;
@@ -11,7 +12,7 @@ interface GeminiResponse {
   total_co2e: number;
 }
 
-const MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+const MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro'];
 
 const cleanJsonText = (rawText: string): string => {
   let cleaned = rawText.trim();
@@ -101,7 +102,7 @@ const getCarbonRating = (co2e: number) => {
   return { grade: 'F', color: 'text-red-400 border-red-500/20 bg-red-500/5' };
 };
 
-export const Scanner: React.FC = () => {
+export const Scanner: FC = () => {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -226,19 +227,19 @@ export const Scanner: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0f0d] pt-24 pb-16 px-4 sm:px-6 lg:px-8 text-white flex flex-col items-center">
+    <div className="min-h-screen bg-[#0a0f0d] pt-20 pb-8 px-4 sm:px-6 lg:px-8 text-white flex flex-col items-center">
       <div className="w-full max-w-4xl">
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-4">
           <h1 className="text-4xl font-outfit font-bold text-emerald-400">GreenLens AI Scanner</h1>
-          <p className="text-gray-400 mt-2">Scan receipts, barcodes, or food items to audit their carbon footprints instantly.</p>
+          <p className="text-gray-400 mt-1">Scan receipts, barcodes, or food items to audit their carbon footprints instantly.</p>
         </div>
 
         {/* Main Input Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
           {/* Column 1: Input controls */}
-          <div className="space-y-6 bg-black/35 backdrop-blur-md p-6 rounded-2xl border border-white/10">
-            <h2 className="text-xl font-outfit font-semibold mb-4 text-emerald-350">Capture or Upload</h2>
+          <div className="space-y-4 bg-black/35 backdrop-blur-md p-6 rounded-2xl border border-white/10">
+            <h2 className="text-xl font-outfit font-semibold mb-2 text-emerald-350">Capture or Upload</h2>
 
             {/* Video Viewport / Preview */}
             <div className="relative aspect-video w-full bg-black/60 rounded-xl overflow-hidden border border-white/5 flex items-center justify-center">

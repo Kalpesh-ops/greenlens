@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import type { FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const SPOTLIGHT_R = 280;
@@ -9,7 +10,7 @@ interface RevealLayerProps {
   cursorY: number;
 }
 
-const RevealLayer: React.FC<RevealLayerProps> = ({ image, cursorX, cursorY }) => {
+const RevealLayer: FC<RevealLayerProps> = ({ image, cursorX, cursorY }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const revealDivRef = useRef<HTMLDivElement | null>(null);
   const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -84,7 +85,7 @@ const RevealLayer: React.FC<RevealLayerProps> = ({ image, cursorX, cursorY }) =>
   );
 };
 
-export const HeroSection: React.FC = () => {
+export const HeroSection: FC = () => {
   const navigate = useNavigate();
   const mouse = useRef({ x: -999, y: -999 });
   const smooth = useRef({ x: -999, y: -999 });

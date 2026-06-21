@@ -12,5 +12,13 @@
         "destination": "/index.html"
       }
     ]
+  },
+  "auth": {
+    "providers": {
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "GreenLens",
+        "supportEmail": "kalpesh.parashar2000@gmail.com"
+      }
+    }
   }
 }
